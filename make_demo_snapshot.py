@@ -7,6 +7,7 @@
 注意：demo.db 中的分析结果为规则生成，并非 LLM 输出，仅用于演示。
 """
 import json
+import os
 import random
 import re
 import shutil
@@ -14,6 +15,7 @@ import shutil
 import numpy as np
 
 from src.config import load_config
+from src.rag import EmbeddingConfig, RAG, _to_blob
 from src.storage import Storage
 
 # 演示用实体词表：覆盖电商与消费主题常见公司/产品
@@ -58,6 +60,25 @@ def _pseudo_vector(entity: str, rng: np.random.RandomState) -> np.ndarray:
     return (vec / np.linalg.norm(vec)).astype(np.float32)
 
 
+def _real_embeddings(texts: list, cfg: dict):
+    """若配置了 EMBEDDING_API_KEY，用硅基流动 bge 模型批量生成真实 embedding。
+
+    返回 np.float32 向量列表（维度由模型决定，bge-small-zh 为 512）；
+    未配置 key 时返回 None，调用方退回伪向量。
+    """
+    if not os.environ.get("EMBEDDING_API_KEY"):
+        return None
+    emb_cfg = EmbeddingConfig(cfg)
+    if not emb_cfg.available:
+        return None
+    try:
+        rag = RAG(emb_cfg, cfg["industry"]["name"])
+        return [np.asarray(v, dtype=np.float32) for v in rag.embed_texts(texts)]
+    except Exception as e:  # 接口异常时不致命，退回伪向量
+        print(f"[WARN] 真实 embedding 失败（{type(e).__name__}），改用伪向量: {e}")
+        return None
+
+
 def main():
     cfg = load_config()
     src_db = cfg["storage"]["db_path"]
@@ -69,9 +90,14 @@ def main():
     keywords = cfg["industry"]["keywords"]
     noise_rng = np.random.RandomState(42)
 
-    # 1. 规则生成分析结果 + 伪向量
+    # 真实 embedding（需 EMBEDDING_API_KEY）；无 key 时为 None，下方退回伪向量
+    real_vecs = _real_embeddings(
+        [f"{r['title']} {r['summary'] or ''}" for r in rows], cfg
+    )
+
+    # 1. 规则生成分析结果 + 向量（真实或伪）
     first_entity = {}
-    for r in rows:
+    for i, r in enumerate(rows):
         text = f"{r['title']} {r['summary'] or ''}"
         # 主主题用于向量关联：同主题文章共享向量基底
         theme = next((name for name, kws in THEME_KEYWORDS if any(k in text for k in kws)), "")
@@ -95,7 +121,9 @@ def main():
                 "entities": entities,
             }
             storage.save_analysis(r["id"], result, tokens=0)
-        storage.save_embedding(r["id"], _pseudo_vector(theme, noise_rng).tobytes())
+
+        vec = real_vecs[i] if real_vecs is not None else _pseudo_vector(theme, noise_rng)
+        storage.save_embedding(r["id"], _to_blob(vec))
 
     # 2. 相似事件关联（复用 rag 的余弦逻辑，阈值与线上一致）
     threshold = cfg["embedding"]["similarity_threshold"]
