@@ -101,8 +101,9 @@ schtasks /create /tn "IntelAgentDaily" /tr "\"C:\path\to\venv\Scripts\python.exe
    ```toml
    INTEL_DB_PATH = "data/intel.demo.db"   # 指向演示快照，只读展示
    LLM_API_KEY = "sk-xxx"                 # 可选，不配则问答降级为纯检索
-   EMBEDDING_API_KEY = "sk-yyy"           # 可选
+   EMBEDDING_API_KEY = "sk-yyy"           # 可选，不配时向量检索自动降级关键词匹配
    ```
+5. 当前部署实例：https://intel-agent.streamlit.app
 
 ## 演示截图
 
