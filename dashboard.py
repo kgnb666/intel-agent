@@ -204,7 +204,7 @@ with tab_chat:
 
     emb_cfg = EmbeddingConfig(cfg)
     llm_cfg = LLMConfig(cfg)
-    llm_ready = emb_cfg.available and llm_cfg.available
+    llm_ready = llm_cfg.available
     if not llm_ready:
         st.warning("未配置 LLM，当前为纯检索模式：返回相关情报列表，不生成自然语言回答。")
 
@@ -216,23 +216,29 @@ with tab_chat:
             st.markdown(msg["content"], unsafe_allow_html=True)
 
     def retrieve(question: str, top_k: int = 5) -> pd.DataFrame:
-        """向量检索相关情报；无 embedding key 时退化为关键词匹配。"""
+        """优先向量检索；embedding 接口不可用时自动降级为关键词匹配。"""
         if emb_cfg.available:
-            rag = RAG(emb_cfg, cfg["industry"]["name"])
-            qvec = rag.embed_texts([question])[0]
-            rows = query(
-                "SELECT id, title, url, summary, embedding FROM articles WHERE embedding IS NOT NULL"
-            )
-            if len(rows):
-                matrix = np.stack([_from_blob(b) for b in rows["embedding"]])
-                sims = cosine(qvec, matrix)
-                rows = rows.assign(sim=sims).sort_values("sim", ascending=False)
-                return rows.head(top_k)
-            return rows
+            try:
+                rag = RAG(emb_cfg, cfg["industry"]["name"])
+                qvec = rag.embed_texts([question])[0]
+                rows = query(
+                    "SELECT id, title, url, summary, embedding FROM articles WHERE embedding IS NOT NULL"
+                )
+                if len(rows):
+                    matrix = np.stack([_from_blob(b) for b in rows["embedding"]])
+                    sims = cosine(qvec, matrix)
+                    rows = rows.assign(sim=sims).sort_values("sim", ascending=False)
+                    return rows.head(top_k)
+                return rows
+            except Exception as e:
+                # 典型情况：LLM_API_KEY 被误当作 embedding key，硅基流动接口 401
+                st.warning(f"向量检索不可用（{type(e).__name__}），已降级为关键词匹配。")
         # 关键词兜底：任一查询词命中标题/摘要即返回
         mask = pd.Series(False, index=articles.index)
         for w in question.split():
             mask |= articles["title"].str.contains(w, case=False, na=False)
+            if "summary" in articles.columns:
+                mask |= articles["summary"].fillna("").str.contains(w, case=False, na=False)
         return articles[mask].head(top_k)
 
     if question := st.chat_input("提问，例如：这周拼多多有什么动态？"):
