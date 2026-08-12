@@ -1,0 +1,57 @@
+# 行业情报分析 Agent - 配置文件
+
+# 关注行业关键词（命中任一即保留，可随时更换行业主题）
+industry:
+  name: "电商与消费"
+  keywords:
+    - 电商
+    - 消费
+    - 零售
+    - 直播带货
+    - 拼多多
+    - 淘宝
+    - 京东
+    - 抖音电商
+    - 快手
+    - 小红书
+    - 美团
+    - 本地生活
+    - 新消费
+    - 品牌
+
+# RSS / 数据源列表（RSS 稳定、无反爬，适合作为主力源）
+sources:
+  - name: "36氪"
+    type: rss
+    url: "https://36kr.com/feed"
+  - name: "IT之家"
+    type: rss
+    url: "https://www.ithome.com/rss/"
+  - name: "少数派"
+    type: rss
+    url: "https://sspai.com/feed"
+
+# 存储
+storage:
+  db_path: "data/intel.db"
+
+# 采集控制
+crawl:
+  max_items_per_source: 50     # 每个源单次最多抓取条数
+  title_similarity_threshold: 0.85  # 标题相似度去重阈值
+
+# LLM 分析配置（api_key 从环境变量读取，绝不写进本文件）
+llm:
+  base_url: "https://api.deepseek.com"   # OpenAI 兼容接口，可被环境变量 LLM_BASE_URL 覆盖
+  model: "deepseek-chat"                 # 可被环境变量 LLM_MODEL 覆盖
+  api_key_env: "LLM_API_KEY"             # 只存放"环境变量名"，不存放密钥本身
+  max_per_run: 20                        # 单次运行最多分析的文章数（成本控制）
+  temperature: 0.2                       # 结构化输出场景用低温度换取稳定性
+
+# RAG / Embedding 配置（DeepSeek 无 embedding，默认用硅基流动免费模型）
+embedding:
+  base_url: "https://api.siliconflow.cn/v1"
+  model: "BAAI/bge-small-zh-v1.5"
+  api_key_env: "EMBEDDING_API_KEY"       # 缺省时回退读 LLM_API_KEY
+  similarity_threshold: 0.75             # 高于该值才判定为"相关事件"
+  top_k: 3                               # 每篇新文章关联的历史相似文章数
