@@ -33,7 +33,7 @@ THEME_KEYWORDS = [
 ]
 _POSITIVE = ("增长", "超预期", "创新高", "发布", "上市", "发售", "领跑", "升级", "优惠")
 _NEGATIVE = ("下降", "暴跌", "亏损", "裁员", "投诉", "处罚", "翻车", "下架", "退")
-_DIM = 64  # 演示向量维度
+_DIM = 1024  # bge-m3 向量维度；无 EMBEDDING_API_KEY 时用伪向量占位，维度需一致
 
 
 def _sentiment(text: str, rng: random.Random) -> tuple:
@@ -63,7 +63,7 @@ def _pseudo_vector(entity: str, rng: np.random.RandomState) -> np.ndarray:
 def _real_embeddings(texts: list, cfg: dict):
     """若配置了 EMBEDDING_API_KEY，用硅基流动 bge 模型批量生成真实 embedding。
 
-    返回 np.float32 向量列表（维度由模型决定，bge-small-zh 为 512）；
+    返回 np.float32 归一化向量列表（bge-m3 维度 1024，与伪向量对齐）；
     未配置 key 时返回 None，调用方退回伪向量。
     """
     if not os.environ.get("EMBEDDING_API_KEY"):
@@ -73,7 +73,9 @@ def _real_embeddings(texts: list, cfg: dict):
         return None
     try:
         rag = RAG(emb_cfg, cfg["industry"]["name"])
-        return [np.asarray(v, dtype=np.float32) for v in rag.embed_texts(texts)]
+        vecs = [np.asarray(v, dtype=np.float32) for v in rag.embed_texts(texts)]
+        # 归一化，使下方关联计算的点积等价于余弦（与伪向量一致）
+        return [v / np.linalg.norm(v) for v in vecs]
     except Exception as e:  # 接口异常时不致命，退回伪向量
         print(f"[WARN] 真实 embedding 失败（{type(e).__name__}），改用伪向量: {e}")
         return None
