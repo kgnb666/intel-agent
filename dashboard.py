@@ -31,6 +31,27 @@ ACCENT = "#1f6feb"
 cfg = load_config()
 DB_PATH = cfg["storage"]["db_path"]
 
+# 云端没有 data/intel.db（被 gitignore），自动回退到仓库内提交的演示快照，
+# 否则 SQLite 会建空库并触发 "no such table: articles" 整页崩溃。
+def _db_has_articles(p: str) -> bool:
+    try:
+        conn = sqlite3.connect(p)
+        try:
+            return conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='articles'"
+            ).fetchone() is not None
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+USING_DEMO = False
+if not _db_has_articles(DB_PATH):
+    demo = os.path.join(os.path.dirname(DB_PATH), "intel.demo.db")
+    if os.path.exists(demo) and _db_has_articles(demo):
+        DB_PATH = demo
+        USING_DEMO = True
+
 
 @st.cache_data(ttl=60)
 def query(sql: str, params: tuple = ()) -> pd.DataFrame:
@@ -46,6 +67,8 @@ def query(sql: str, params: tuple = ()) -> pd.DataFrame:
 
 st.sidebar.title("⚙️ 控制台")
 st.sidebar.caption(f"行业主题：{cfg['industry']['name']}")
+if USING_DEMO:
+    st.sidebar.caption("⚠️ 当前展示演示快照数据（data/intel.demo.db）")
 
 days = st.sidebar.slider("数据时间范围（天）", 1, 30, 7)
 since = (date.today() - timedelta(days=days - 1)).isoformat()
