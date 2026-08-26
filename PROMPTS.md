@@ -56,9 +56,9 @@
 
 要求：
 1. 新建 src/rag.py：
-   - 用 embedding API（与 analyzer 同一套 OpenAI 兼容配置，DeepSeek 无 embedding 则改用硅基流动免费模型 BAAI/bge-small-zh-v1.5，base_url: https://api.siliconflow.cn/v1）
+   - 用 embedding API（与 analyzer 同一套 OpenAI 兼容配置，DeepSeek 无 embedding 则改用硅基流动免费模型 BAAI/bge-m3，base_url: https://api.siliconflow.cn/v1）
    - 文章摘要做向量化，存入 SQLite（BLOB 存 float 数组即可，数据量小不需要 faiss，用 numpy 算余弦相似度）
-   - 每篇新文章检索 Top-3 历史相似文章，相似度 > 0.75 才判定为"相关事件"
+   - 每篇新文章检索 Top-3 历史相似文章，相似度 ≥ 0.6 才判定为"相关事件"（bge-m3 语义相似度偏低，0.6 为质量/数量平衡点）
 2. 关联结果入库：related_event 字段记录关联链条（如"拼多多 Q2 财报"关联"拼多多 Q1 财报"）
 3. 趋势提炼：每周对相似事件聚类，让 LLM 生成"本周趋势脉络"段落
 4. 新建 run_rag.py 入口，输出示例关联结果供验证

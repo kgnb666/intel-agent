@@ -105,6 +105,19 @@ schtasks /create /tn "IntelAgentDaily" /tr "\"C:\path\to\venv\Scripts\python.exe
    ```
 5. 当前部署实例：https://intel-agent.streamlit.app
 
+## 配套文档
+
+- [项目完成报告](docs/FINAL_REPORT.md)
+- [架构设计](docs/ARCHITECTURE.md)
+- [评测体系说明](docs/EVAL.md)
+- [部署指南](docs/DEPLOYMENT.md)
+- [3 分钟演示脚本](docs/DEMO_SCRIPT.md)
+- [开发路线图（回顾版）](docs/ROADMAP.md)
+- [简历条目模板](docs/RESUME.md)
+- [投递前检查清单](docs/CHECKLIST.md)
+- [面试问答预案](面试问答预案.md)
+- [分阶段执行提示词](PROMPTS.md)
+
 ## 演示截图
 
 > 占位：部署后补充
