@@ -4,10 +4,13 @@
 
 ## ✅ 代码与质量（已完成，可复跑验证）
 
-- [x] 单元测试全绿：`cd intel-agent && pytest -q`（10 个）
+- [x] 单元测试全绿：`cd intel-agent && pytest -q`（197 个，覆盖十大模块）
+- [x] 静态代码检查：`ruff check src tests *.py` 0 警告 0 错误通过 CI 门禁
+- [x] 容器化交付物：`Dockerfile`、`.dockerignore` 与 `docker-compose.yml` 齐备
 - [x] 采集实测：3 源单轮约 60 条、命中约 12 条、重复入库 0%
 - [x] 主库数据：`data/intel.db` 34 条文章 / 24 条已分析
 - [x] dry-run 全链路：`run_analyze --dry-run` / `run_rag --dry-run` / `run_daily --no-send` 均通过
+- [x] 事件时间线 + 告警 dry-run：`run_daily --webhook <url> --webhook-dry-run` 通过（不实际发送）
 - [x] 看板启动正常：`streamlit run dashboard.py` → HTTP 200
 - [x] 演示快照：`make_demo_snapshot.py` 产出 `intel.demo.db`（24 篇分析 / 3 条趋势）
 
@@ -33,4 +36,3 @@
 - [ ] 干净机器走一遍：采集 → 分析 → 关联 → 看板 → 日报
 - [ ] 问自己：「为什么用 RSS」「双重去重怎么做的」「为什么用向量检索」「数据量大了怎么办」「最难的地方是什么」
 - [ ] 确认 API Key 没有出现在任何提交文件里
-

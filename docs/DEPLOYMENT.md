@@ -48,7 +48,7 @@ set SMTP_HOST=smtp.example.com
 set SMTP_PORT=465
 set SMTP_USER=you@example.com
 set SMTP_PASSWORD=***
-set MAIL_TO=receiver@example.com
+set SMTP_TO=receiver@example.com
 "C:\path\to\venv\Scripts\python.exe" C:\path\to\intel-agent\run_daily.py
 ```
 
@@ -69,17 +69,36 @@ set MAIL_TO=receiver@example.com
    ```
 5. 当前部署实例：https://intel-agent.streamlit.app
 
-## 5. 常见问题排查
+## 5. Docker 容器化部署（生产交付）
+
+项目已内置标准生产级 `Dockerfile` 与 `docker-compose.yml`，支持一键拉起看板与自动化抓取流水线：
+
+```bash
+# 构建并后台启动看板与定时流水线服务
+docker-compose up -d --build
+
+# 查看运行日志
+docker-compose logs -f
+
+# 停止服务
+docker-compose down
+```
+
+挂载卷说明：
+- `./data:/app/data`：持久化 SQLite 数据库文件（`intel.db`）。
+- `./output:/app/output`：持久化历史邮件日报（`daily_*.html`）与运行日志（`agent.log`）。
+
+## 6. 常见问题排查
 
 | 现象 | 原因与处理 |
 |---|---|
 | 采集总是超时 | RSS 源不稳定，程序已内置超时 + 重试 2 次；可在 `config.yaml` 的 `sources` 增删源 |
 | 看板整页崩溃 "no such table" | 云端没有 `data/intel.db`，程序已自动回退演示库；确认 `INTEL_DB_PATH` 指向已提交的快照 |
 | 问答答非所问 | 无 embedding key 时降级为关键词检索，语义关联能力受限；配置 `EMBEDDING_API_KEY` 后恢复 |
-| 邮件发不出去 | 确认 SMTP_HOST/PORT/USER/PASSWORD/TO 均已配置；先跑 `python run_daily.py --no-send` 验证日报生成 |
+| 邮件发不出去 | 确认 SMTP_HOST/PORT/USER/PASSWORD/TO 均已配置（收件人兼容 `SMTP_TO` 与 `MAIL_TO`）；先跑 `python run_daily.py --no-send` 验证日报生成 |
 | 依赖装不上 | `requirements.txt` 里的 pandas 是看板依赖；云端漏装会启动崩，务必整份安装 |
 
-## 6. 上线前安全检查
+## 7. 上线前安全检查
 
 - 确认 `config.yaml` 中**没有**真实 API Key（只允许环境变量名）
 - 确认 `.gitignore` 排除 `data/intel.db`（真实库），只提交 `intel.demo.db` 快照

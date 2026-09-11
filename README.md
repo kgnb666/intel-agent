@@ -1,6 +1,6 @@
 # 智能行业情报分析 Agent
 
-一条自动运行的行业情报流水线：**采集行业资讯 → 清洗去重 → LLM 结构化分析 → RAG 历史关联 → 可视化看板 → 每日邮件日报**。
+一条自动运行的行业情报流水线：**采集行业资讯 → 清洗去重 → LLM 结构化分析 → RAG 历史关联 → 事件聚合 → 可视化看板 → 每日邮件日报**，负面高置信度事件还会实时推送 Webhook 告警。
 
 默认主题为「电商与消费」，改 `config.yaml` 里的关键词和数据源即可切换到任意行业，零代码改动。
 
@@ -15,12 +15,16 @@ flowchart LR
     A[RSS 数据源<br>36氪/IT之家/少数派] --> B[crawler.py<br>抓取+关键词过滤+去重]
     B --> C[(SQLite<br>articles/analysis/trends)]
     C --> D[analyzer.py<br>LLM 摘要/情感/标签/实体]
-    D --> E[rag.py<br>向量检索+趋势聚类]
-    C --> F[dashboard.py<br>Streamlit 看板+问答]
+    D --> E[rag.py<br>向量检索+关联链]
+    E --> C
+    C --> E2[events.py<br>关联链→事件实体+时间线]
+    C --> F[dashboard.py<br>看板+问答+事件时间线]
     D --> F
-    E --> F
-    E --> G[report.py<br>HTML 日报]
+    E2 --> F
+    E2 --> G[report.py<br>HTML 日报]
     G --> H[mailer.py<br>SMTP 推送]
+    E2 --> J[alert.py<br>负面高置信 Webhook 告警]
+    J --> K[钉钉/企业微信机器人]
     I[run_daily.py<br>一键流水线+定时任务] --> B
 ```
 
@@ -47,6 +51,10 @@ streamlit run dashboard.py
 # 5. 每日日报（不发邮件，HTML 落盘 preview）
 python run_daily.py --no-send
 # 配置 SMTP_HOST/PORT/USER/PASSWORD/TO 后去掉 --no-send 即真实发送
+
+# 6. 负面高置信度事件实时告警（可选，钉钉/企业微信机器人）
+python run_daily.py --no-send --webhook https://oapi.dingtalk.com/robot/send?access_token=xxx --webhook-dry-run  # 先预览 JSON
+python run_daily.py --no-send --webhook https://oapi.dingtalk.com/robot/send?access_token=xxx                    # 实际推送
 ```
 
 ## 技术决策（面试重点）
@@ -78,8 +86,12 @@ RSS 稳定、无反爬、结构规范，作为主力源性价比最高；爬虫�
 
 ## 量化成果
 
-- 单轮采集：3 个 RSS 源抓取 60 条，关键词命中约 12 条，双重去重后入库（实测去重率约 0% 重复入库）
-- 单元测试：10 个用例覆盖关键词过滤/相似度去重/HTML 清洗/重试机制，`pytest` 全绿
+- 单轮采集：3 个 RSS 源抓取 60 条，关键词命中约 12 条，双重去重与批量事务入库（实测去重率约 0% 重复入库，支持连续故障数据源自动熔断跳过）
+- 单元测试：197 个用例覆盖告警/分析/配置/采集/事件/日志/邮件/RAG/日报/存储十大模块（25 + 20 + 30 + 20 + 13 + 4 + 17 + 23 + 15 + 30），`pytest` 全绿，离线可跑无需 API key
+- 事件聚合：related_event 关联链 → 事件实体 + 时间线，看板「事件时间线」视图带 60s 内存缓存；支持 `max_size=15` 关联密度拓扑剪枝，阻断传递性长链漂移
+- 实时告警：负面且置信度 ≥ 0.8 的事件推送钉钉/企业微信 Webhook，内置 sent_alerts 状态持久化防风暴去重、排障日志留痕与失败降级
+- 生命周期：支持 `--prune-days` 历史文章与向量 TTL 自动淘汰修剪（级联清理 + WAL Checkpoint），保留最近 30 天 HTML 报表轮转
+- 工程交付：提供轻量级生产 Dockerfile、docker-compose 编排与 GitHub Actions CI ruff 静态质量门禁
 - 单次 LLM 分析上限 20 篇（`max_per_run` 可配），成本可控
 - 日报生成到 HTML 落盘全流程 < 30 秒（无 LLM 调用时）
 
@@ -133,7 +145,7 @@ intel-agent/
 ├── run_crawl.py       # 采集入口
 ├── run_analyze.py     # LLM 分析入口（--dry-run 可无 key 验证）
 ├── run_rag.py         # RAG 关联入口
-├── run_daily.py       # 每日一键流水线（--no-send 只出 HTML）
+├── run_daily.py       # 每日一键流水线（--no-send 只出 HTML / --webhook 实时告警）
 ├── make_demo_snapshot.py  # 生成演示数据快照（规则数据，供部署/演示）
 ├── dashboard.py       # Streamlit 看板 + 对话式问答
 ├── requirements.txt
@@ -143,6 +155,8 @@ intel-agent/
 │   ├── crawler.py     # RSS 采集 + 关键词过滤 + 相似度去重 + 重试
 │   ├── analyzer.py    # LLM 结构化分析（JSON 契约 + 容错重试）
 │   ├── rag.py         # 向量检索 + 相似事件关联 + 周度趋势聚类
+│   ├── events.py      # 关联链 → 事件实体 + 时间线
+│   ├── alert.py       # 负面高置信事件 Webhook 告警（钉钉/企业微信）
 │   ├── report.py      # HTML 日报生成（table 布局兼容邮件客户端）
 │   └── mailer.py      # SMTP 发信
 ├── tests/             # pytest 单元测试
@@ -157,4 +171,6 @@ intel-agent/
 - [x] RAG 历史情报关联
 - [x] Streamlit 可视化看板（含对话式问答）
 - [x] 邮件定时推送
+- [x] 事件级聚合（related_event 链 → 事件实体 + 时间线，看板视图）
+- [x] 负面高置信度实时告警（--webhook / alert.webhook，钉钉/企业微信兼容）
 - [ ] 部署上线（Streamlit Community Cloud）

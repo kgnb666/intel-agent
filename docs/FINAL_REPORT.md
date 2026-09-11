@@ -14,10 +14,11 @@
 | 数据库 | ✅ SQLite 三表（articles / analysis / trends），存储访问收敛单文件，预留 PostgreSQL 迁移路径 |
 | LLM 应用 | ✅ DeepSeek 结构化分析（JSON 契约 + 重试 + 增量 + token 成本核算） |
 | RAG | ✅ bge-m3 向量化 + numpy 余弦 Top-3 关联 + 周度趋势聚类，无 Key 自动降级 |
+| 事件聚合 / 实时告警 | ✅ related_event 链 → 事件实体 + 时间线（看板视图）；负面高置信事件钉钉/企业微信 Webhook 推送（`--webhook`），无配置静默跳过 |
 | 前端可视化 | ✅ Streamlit 看板：指标卡 / 情感趋势 / 情报列表 / 对话式问答（带引用） |
 | 定时任务 / 推送 | ✅ run_daily 一键流水线 + HTML 日报 + SMTP 邮件 + Windows 任务计划方案 |
 | 可演示 | ✅ 演示快照零 Key 部署 + 3 分钟分镜脚本 + 已上线 https://intel-agent.streamlit.app |
-| 可量化 | ✅ 10 个单元测试、实测去重率 0%、日报全流程 < 30 秒（见 docs/EVAL.md） |
+| 可量化 | ✅ 197 个单元测试全绿、实测去重率 0%、日报全流程 < 30 秒（见 docs/EVAL.md） |
 | 面试准备 | ✅ README 技术决策 + 面试问答预案 10 问 + 简历条目 + 30 秒电梯演讲 |
 
 ## 三、工程亮点（面试核心故事线）
@@ -26,12 +27,15 @@
 2. **双重去重**：URL 约束精确层 + 标题相似度事件层，去重粒度从"链接"提升到"事件"
 3. **LLM 输出工程化**：字段契约 + JSON 强制 + 宽容解析严格校验 + 失败留痕，不把 LLM 当确定性函数
 4. **选型边界清晰**：小数据量不上向量数据库（numpy 毫秒级、BLOB 零依赖），但检索逻辑独立预留 faiss/Milvus 升级路径
-5. **降级文化**：所有模块支持 dry-run / 自动降级 / 每步容错，"半成品日报好过没有日报"
+5. **降级文化与防灾加固**：所有模块支持 dry-run / 自动降级 / 每步容错，"半成品日报好过没有日报"；内置 sent_alerts 强幂等防风暴、Webhook 排障日志透明化与看板线程安全
+6. **企业级防灾**：针对告警风暴隐患建立 sent_alerts 状态表，重试不重复骚扰群聊，单次推送错误详细留痕
+7. **生命周期与健康自治**：SQLite 数据 TTL 级联修剪 + WAL 自动 Checkpoint，HTML 历史报表轮转；采集层单事务批量 Commit 压减 I/O 争用；信源连续失败熔断隔离防雪崩
+8. **图计算防漂移与工业交付**：并查集事件聚合实施关联密度拓扑剪枝，阻断传递性长链主题漂移；交付标准 Dockerfile 与 docker-compose 编排，CI 引入 ruff 静态质量门禁
 
 ## 四、验证数据（可复现）
 
 ```
-单元测试      10 个全绿（关键词过滤/相似度去重/HTML 清洗/重试机制）
+单元测试      197 个全绿（告警 25 / 分析 20 / 配置 30 / 采集 20 / 事件 13 / 日志 4 / 邮件 17 / RAG 23 / 日报 15 / 存储 30）
 采集去重      3 源单轮约 60 条 → 命中约 12 条 → 重复入库 0%
 主库现状      data/intel.db：34 条文章 / 24 条已分析
 演示快照      intel.demo.db：24 篇全分析 / 3 条趋势（规则数据，非 LLM 输出）
@@ -44,17 +48,16 @@
 
 - 采集：feedparser + requests（超时/重试）；存储：SQLite；分析：DeepSeek（OpenAI 兼容）
 - RAG：bge-m3（硅基流动）embedding + numpy 余弦；前端：Streamlit + plotly
-- 工程：10 个 pytest 用例、dry-run 全链路、演示快照、Windows 定时任务
+- 工程：197 个 pytest 单元测试全绿、ruff 静态检查 0 告警、Dockerfile 容器化、dry-run 全链路、演示快照、Windows 定时任务
 
 ## 六、诚实边界与剩余事项
 
 1. **RAG 关联 / 趋势当前只有演示快照数据**（规则生成）；配置 `EMBEDDING_API_KEY` 跑 `run_rag.py` 可补真实结果
 2. 摘要质量尚未做人工抽检打分（面试时如实说明评估现状与后续方案）
 3. 部署实例已上线，但演示截图未补（见 docs/DEMO_SCRIPT.md）
-4. 后续演进：信源扩展 → 事件实体聚合 → 负面事件实时告警
+4. 后续演进：多信源扩展与反爬对抗 → 多模态图文资讯解析 → 私有化与 PostgreSQL/pgvector 迁移
 
 ## 七、给用户的投递前提醒
 
 - API Key 只允许通过环境变量注入，`config.yaml` 中只有变量名——推送前 `git grep` 确认无真实 Key
 - `data/intel.db` 是真实库，`.gitignore` 已排除；云端部署只提交 `intel.demo.db`
-
