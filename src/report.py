@@ -4,7 +4,6 @@ HTML 邮件的兼容性约束比网页严格得多：多数邮件客户端（尤
 Outlook）不支持 flex/grid 和外部 CSS，因此布局用 table、样式全部内联。
 """
 import html
-import json
 from datetime import date, datetime, timedelta
 
 SENTIMENT_COLOR = {"正面": "#2e9e5b", "中性": "#8a8f98", "负面": "#d64545"}
@@ -54,6 +53,61 @@ def collect_daily(storage, day: str = None) -> dict:
 
 def _esc(text) -> str:
     return html.escape(str(text or ""))
+
+
+def render_plain_text(data: dict, industry: str, degraded_notes: list = None) -> str:
+    """渲染纯文本邮件正文（text/plain）。作为 HTML 的备用正文，适配终端及纯文本邮件客户端。"""
+    d = data
+    dist = d.get("sentiment_dist", {})
+    dist_text = f"正面 {dist.get('正面', 0)} · 中性 {dist.get('中性', 0)} · 负面 {dist.get('负面', 0)}"
+
+    lines = [
+        f"【{industry} · 每日情报日报】",
+        f"{d.get('day', '')} · 新增 {d.get('total', 0)} 条 · 已分析 {d.get('analyzed', 0)} 条 · {dist_text}",
+        "=" * 50,
+    ]
+
+    if degraded_notes:
+        lines.append("⚠️ 本次流水线部分环节降级：")
+        for n in degraded_notes:
+            lines.append(f"  - {n}")
+        lines.append("-" * 50)
+
+    lines.append("🔥 今日 Top 事件：")
+    top_events = d.get("top_events", [])
+    if top_events:
+        for i, e in enumerate(top_events, 1):
+            title = e.get("title", "")
+            sentiment = e.get("sentiment", "中性")
+            summary = e.get("summary_ai", "")
+            source = e.get("source", "")
+            url = e.get("url", "")
+            lines.append(f"{i}. [{sentiment}] {title}")
+            if summary:
+                lines.append(f"   摘要: {summary}")
+            info = []
+            if source:
+                info.append(f"来源: {source}")
+            if url:
+                info.append(f"链接: {url}")
+            if info:
+                lines.append(f"   {' | '.join(info)}")
+            lines.append("")
+    else:
+        lines.append("当日无已分析事件\n")
+
+    trends = d.get("trends", [])
+    if trends:
+        lines.append("-" * 50)
+        lines.append("📈 本周趋势脉络：")
+        for t in trends:
+            lines.append(f"[{t.get('week_start', '')}] {t.get('content', '')}")
+        lines.append("")
+
+    lines.append("-" * 50)
+    lines.append(f"由「智能行业情报分析 Agent」自动生成 · {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+
+    return "\n".join(lines).strip()
 
 
 def render_html(data: dict, industry: str, degraded_notes: list = None) -> str:

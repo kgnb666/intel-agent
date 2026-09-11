@@ -1,8 +1,16 @@
 __pycache__/
 *.pyc
 .venv/
+.pytest_cache/
 output/
+
+# 敏感配置文件
+.env
+*.env
 
 # 线上数据库不入库；演示快照（*.demo.db）需要提交，用于 Streamlit Cloud 部署
 data/*.db
 !data/*.demo.db
+data/*.db-wal
+data/*.db-shm
+

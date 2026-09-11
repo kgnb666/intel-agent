@@ -2,7 +2,7 @@
 import json
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS articles (
@@ -36,6 +36,28 @@ CREATE TABLE IF NOT EXISTS trends (
     content     TEXT NOT NULL,           -- LLM 生成的趋势脉络段落
     created_at  TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS sent_reports (
+    day         TEXT PRIMARY KEY,        -- 报告日期 YYYY-MM-DD
+    sent_at     TEXT NOT NULL            -- 发送完成时间
+);
+
+CREATE TABLE IF NOT EXISTS sent_alerts (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id    INTEGER NOT NULL,
+    article_id  INTEGER NOT NULL,
+    sent_at     TEXT NOT NULL,
+    UNIQUE(event_id, article_id)
+);
+
+CREATE TABLE IF NOT EXISTS feed_health (
+    url                  TEXT PRIMARY KEY,
+    source_name          TEXT NOT NULL,
+    consecutive_failures INTEGER DEFAULT 0,
+    last_error           TEXT,
+    last_success_at      TEXT,
+    updated_at           TEXT NOT NULL
+);
 """
 
 
@@ -49,8 +71,11 @@ def _ensure_column(conn, table: str, column: str, ddl: str):
 class Storage:
     def __init__(self, db_path: str):
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
-        self.conn = sqlite3.connect(db_path)
+        self.conn = sqlite3.connect(db_path, timeout=10.0)
         self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA journal_mode=WAL;")
+        self.conn.execute("PRAGMA busy_timeout=10000;")
+        self.conn.execute("PRAGMA synchronous=NORMAL;")
         self.conn.executescript(SCHEMA)
         # articles 表追加 RAG 阶段字段：向量与关联事件链
         _ensure_column(self.conn, "articles", "embedding", "embedding BLOB")
@@ -76,6 +101,33 @@ class Storage:
             return True
         except sqlite3.IntegrityError:
             return False
+
+    def insert_articles(self, items: list) -> int:
+        """批量插入情报，URL 已存在则跳过。单事务提交，返回实际新插入篇数。"""
+        if not items:
+            return 0
+        inserted = 0
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        with self.conn:
+            for item in items:
+                try:
+                    self.conn.execute(
+                        """INSERT INTO articles (url, title, summary, source, published, fetched_at)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        (
+                            item["url"],
+                            item["title"],
+                            item.get("summary", ""),
+                            item["source"],
+                            item.get("published", ""),
+                            now_iso,
+                        ),
+                    )
+                    inserted += 1
+                except sqlite3.IntegrityError:
+                    continue
+        return inserted
+
 
     def count(self) -> int:
         row = self.conn.execute("SELECT COUNT(*) AS n FROM articles").fetchone()
@@ -180,3 +232,118 @@ class Storage:
             "SELECT * FROM trends ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # ---------- 日报发送记录 ----------
+
+    def has_report_sent(self, day: str) -> bool:
+        """检查指定日期的日报是否已发送过。"""
+        row = self.conn.execute(
+            "SELECT 1 FROM sent_reports WHERE day = ?", (day,)
+        ).fetchone()
+        return row is not None
+
+    def record_report_sent(self, day: str):
+        """记录指定日期的日报发送完成状态。"""
+        with self.conn:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO sent_reports (day, sent_at) VALUES (?, ?)",
+                (day, datetime.now().isoformat(timespec="seconds")),
+            )
+
+    # ---------- 告警发送记录 ----------
+
+    def is_alert_sent(self, event_id: int, article_id: int) -> bool:
+        """检查指定事件的核心报道是否已发送过告警。"""
+        row = self.conn.execute(
+            "SELECT 1 FROM sent_alerts WHERE event_id = ? AND article_id = ?",
+            (event_id, article_id),
+        ).fetchone()
+        return row is not None
+
+    def record_alert_sent(self, event_id: int, article_id: int):
+        """记录指定事件的核心报道告警发送完成状态。"""
+        with self.conn:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO sent_alerts (event_id, article_id, sent_at) VALUES (?, ?, ?)",
+                (event_id, article_id, datetime.now().isoformat(timespec="seconds")),
+            )
+
+    # ---------- 数据生命周期修剪 (TTL) ----------
+
+    def prune_history(self, retention_days: int = 90) -> dict:
+        """删除超过 retention_days 天的历史文章，级联清理 analysis 和 sent_alerts。
+        完成后触发 WAL checkpoint 释放空间。
+        """
+        if retention_days <= 0:
+            return {"deleted_articles": 0, "deleted_analysis": 0}
+        cutoff = (datetime.now() - timedelta(days=retention_days)).date().isoformat()
+        with self.conn:
+            cur_an = self.conn.execute(
+                "DELETE FROM analysis WHERE article_id IN (SELECT id FROM articles WHERE date(fetched_at) < ?)",
+                (cutoff,),
+            )
+            deleted_an = cur_an.rowcount
+            self.conn.execute(
+                "DELETE FROM sent_alerts WHERE article_id IN (SELECT id FROM articles WHERE date(fetched_at) < ?)",
+                (cutoff,),
+            )
+            cur_art = self.conn.execute(
+                "DELETE FROM articles WHERE date(fetched_at) < ?", (cutoff,)
+            )
+            deleted_art = cur_art.rowcount
+
+        try:
+            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        except Exception:
+            pass
+
+        return {"deleted_articles": deleted_art, "deleted_analysis": deleted_an}
+
+    # ---------- 数据源健康度管理 ----------
+
+    def record_feed_result(self, url: str, name: str, success: bool, error: str = None):
+        """记录数据源抓取结果并更新连续失败计数。"""
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        with self.conn:
+            row = self.conn.execute(
+                "SELECT consecutive_failures FROM feed_health WHERE url = ?", (url,)
+            ).fetchone()
+            if success:
+                if row:
+                    self.conn.execute(
+                        """UPDATE feed_health SET consecutive_failures = 0, last_error = NULL,
+                                  last_success_at = ?, updated_at = ? WHERE url = ?""",
+                        (now_iso, now_iso, url),
+                    )
+                else:
+                    self.conn.execute(
+                        """INSERT INTO feed_health (url, source_name, consecutive_failures, last_error, last_success_at, updated_at)
+                           VALUES (?, ?, 0, NULL, ?, ?)""",
+                        (url, name, now_iso, now_iso),
+                    )
+            else:
+                prev_failures = row["consecutive_failures"] if row else 0
+                new_failures = prev_failures + 1
+                if row:
+                    self.conn.execute(
+                        """UPDATE feed_health SET consecutive_failures = ?, last_error = ?,
+                                  updated_at = ? WHERE url = ?""",
+                        (new_failures, str(error or "")[:500], now_iso, url),
+                    )
+                else:
+                    self.conn.execute(
+                        """INSERT INTO feed_health (url, source_name, consecutive_failures, last_error, last_success_at, updated_at)
+                           VALUES (?, ?, ?, ?, NULL, ?)""",
+                        (url, name, new_failures, str(error or "")[:500], now_iso),
+                    )
+
+    def is_feed_broken(self, url: str, max_failures: int = 5) -> bool:
+        """检查数据源是否已连续失败达到阈值处于熔断状态。"""
+        row = self.conn.execute(
+            "SELECT consecutive_failures FROM feed_health WHERE url = ?", (url,)
+        ).fetchone()
+        if row and (row["consecutive_failures"] or 0) >= max_failures:
+            return True
+        return False
+
+

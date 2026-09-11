@@ -1,0 +1,14 @@
+.git
+.gitignore
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+output/*.html
+output/*.log
+.pytest_cache
+.ruff_cache
+tests
+.github

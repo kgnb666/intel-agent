@@ -8,8 +8,11 @@
 import argparse
 
 from src.analyzer import Analyzer, LLMConfig
-from src.config import load_config
+from src.config import load_config_or_exit
+from src.logger import get_logger
 from src.storage import Storage
+
+logger = get_logger("run_analyze")
 
 
 def main():
@@ -18,12 +21,12 @@ def main():
     parser.add_argument("--limit", type=int, default=None, help="本次最大处理篇数")
     args = parser.parse_args()
 
-    cfg = load_config()
+    cfg = load_config_or_exit()
     llm_cfg = LLMConfig(cfg)
 
     if not args.dry_run and not llm_cfg.available:
-        print("未检测到 API key（环境变量 %s）。" % cfg["llm"].get("api_key_env", "LLM_API_KEY"))
-        print("请设置后重试，或使用 --dry-run 模式验证流程。")
+        logger.warning("未检测到 API key（环境变量 %s）。", cfg["llm"].get("api_key_env", "LLM_API_KEY"))
+        logger.warning("请设置后重试，或使用 --dry-run 模式验证流程。")
         return
 
     storage = Storage(cfg["storage"]["db_path"])
@@ -33,12 +36,12 @@ def main():
     finally:
         storage.close()
 
-    print(f"模型: {llm_cfg.model} @ {llm_cfg.base_url}")
-    print(f"处理 {stats['total']} 篇 | 成功 {stats['success']} | 失败 {stats['failed']} | 消耗 token {stats['tokens']}")
+    logger.info(f"模型: {llm_cfg.model} @ {llm_cfg.base_url}")
+    logger.info(f"处理 {stats['total']} 篇 | 成功 {stats['success']} | 失败 {stats['failed']} | 消耗 token {stats['tokens']}")
     if stats["errors"]:
-        print("失败明细:")
+        logger.warning("失败明细:")
         for e in stats["errors"]:
-            print(" -", e)
+            logger.warning(f" - {e}")
 
 
 if __name__ == "__main__":

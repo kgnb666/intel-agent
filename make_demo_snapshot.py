@@ -6,7 +6,6 @@
 
 注意：demo.db 中的分析结果为规则生成，并非 LLM 输出，仅用于演示。
 """
-import json
 import os
 import random
 import re
@@ -14,7 +13,7 @@ import shutil
 
 import numpy as np
 
-from src.config import load_config
+from src.config import load_config_or_exit
 from src.rag import EmbeddingConfig, RAG, _to_blob
 from src.storage import Storage
 
@@ -82,9 +81,15 @@ def _real_embeddings(texts: list, cfg: dict):
 
 
 def main():
-    cfg = load_config()
+    cfg = load_config_or_exit()
     src_db = cfg["storage"]["db_path"]
     demo_db = re.sub(r"\.db$", ".demo.db", src_db)
+
+    # 复制前强制 WAL checkpoint，确保预写日志完全写回主库 .db 文件
+    src_storage = Storage(src_db)
+    src_storage.conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+    src_storage.close()
+
     shutil.copyfile(src_db, demo_db)
 
     storage = Storage(demo_db)

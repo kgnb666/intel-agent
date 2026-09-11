@@ -55,3 +55,8 @@ embedding:
   api_key_env: "EMBEDDING_API_KEY"       # 缺省时回退读 LLM_API_KEY
   similarity_threshold: 0.6              # bge-m3 语义相似度偏低，0.6 为质量/数量平衡点
   top_k: 3                               # 每篇新文章关联的历史相似文章数
+
+# 实时告警（可选）：负面高置信度事件推送钉钉/企业微信 webhook
+alert:
+  webhook: ""                            # 机器人 webhook 地址；留空则不告警
+  min_confidence: 0.8                    # 负面情感置信度达到该值才触发告警

@@ -7,10 +7,14 @@
   引入 faiss/Milvus 属于过度工程，BLOB 存 float 数组够用且零依赖
 """
 import json
+import logging
 import os
+import time
 from datetime import datetime, timedelta
 
 import numpy as np
+
+logger = logging.getLogger("rag")
 
 _TREND_PROMPT = """你是一名行业情报分析师。以下是「{industry}」行业本周发生的一组相互关联的事件，请用一段话（150 字内）提炼它们共同反映的趋势脉络，指出事件之间的演进关系。
 
@@ -34,6 +38,7 @@ class EmbeddingConfig:
         self.api_key = os.environ.get(key_env) or os.environ.get("LLM_API_KEY", "")
         self.threshold = float(emb.get("similarity_threshold", 0.75))
         self.top_k = int(emb.get("top_k", 3))
+        self.batch_size = int(emb.get("batch_size", 16))
 
     @property
     def available(self) -> bool:
@@ -60,10 +65,11 @@ def cosine(query: np.ndarray, matrix: np.ndarray) -> np.ndarray:
 class RAG:
     """向量化 + 相似事件检索 + 周度趋势聚类。"""
 
-    def __init__(self, emb_cfg: EmbeddingConfig, industry: str, llm_cfg=None, dry_run: bool = False):
+    def __init__(self, emb_cfg: EmbeddingConfig, industry: str, llm_cfg=None, dry_run: bool = False, batch_size: int = None):
         self.cfg = emb_cfg
         self.industry = industry
         self.llm_cfg = llm_cfg
+        self.batch_size = batch_size or getattr(emb_cfg, "batch_size", 16) or 16
         self.emb_client = None
         self.chat_client = None
         if not dry_run:
@@ -81,7 +87,7 @@ class RAG:
         return [np.array(d.embedding, dtype=np.float32) for d in resp.data]
 
     def vectorize_pending(self, storage, dry_run: bool = False) -> int:
-        """给没有向量的文章补 embedding，返回处理数。"""
+        """给没有向量的文章补 embedding，分批调用并持久化，返回处理成功数。"""
         pending = storage.articles_without_embedding()
         if not pending:
             return 0
@@ -89,12 +95,35 @@ class RAG:
             for a in pending:
                 print(f"[DRY-RUN] 将向量化: #{a['id']} 《{a['title']}》")
             return len(pending)
-        # 批量调用减少网络往返
-        texts = [(a["title"] + " " + (a["text"] or ""))[:800] for a in pending]
-        vectors = self.embed_texts(texts)
-        for a, v in zip(pending, vectors):
-            storage.save_embedding(a["id"], _to_blob(v))
-        return len(pending)
+
+        processed = 0
+        batch_size = max(1, self.batch_size)
+
+        for i in range(0, len(pending), batch_size):
+            chunk = pending[i : i + batch_size]
+            texts = [(a["title"] + " " + (a["text"] or ""))[:800] for a in chunk]
+
+            # 单批指数退避重试（最多 3 次），避免偶发网络抖动导致整批中断
+            vectors = None
+            delay = 2
+            last_err = None
+            for attempt in range(3):
+                try:
+                    vectors = self.embed_texts(texts)
+                    break
+                except Exception as e:
+                    last_err = e
+                    if attempt < 2:
+                        time.sleep(delay)
+                        delay *= 2
+            if vectors is None:
+                raise last_err
+
+            for a, v in zip(chunk, vectors):
+                storage.save_embedding(a["id"], _to_blob(v))
+            processed += len(chunk)
+
+        return processed
 
     # ---------- 相似事件检索 ----------
 
@@ -137,11 +166,12 @@ class RAG:
 
     # ---------- 周度趋势聚类 ----------
 
-    def weekly_trends(self, storage, dry_run: bool = False) -> list:
+    def weekly_trends(self, storage, dry_run: bool = False, max_cluster_size: int = 10) -> list:
         """把本周通过相似度连成链的事件聚类，逐簇让 LLM 提炼趋势段落。
 
         聚类用并查集：related_event 构成无向边，连通分量即一个趋势簇。
-        数据量小，不需要引入图库或聚类算法库。
+        数据量小，不需要引入图库或聚类算法库。若某趋势簇超过 max_cluster_size，
+        优先保留关联度最高的代表性报道，避免 Prompt 过长且造成提炼失焦。
         """
         week_start = (datetime.now() - timedelta(days=datetime.now().weekday())).date().isoformat()
         rows = storage.conn.execute(
@@ -169,6 +199,29 @@ class RAG:
 
         results = []
         for members in clusters.values():
+            if len(members) < 2:
+                continue
+            if max_cluster_size is not None and max_cluster_size > 0 and len(members) > max_cluster_size:
+                member_ids = {m["id"] for m in members}
+                scores = {m["id"]: 0.0 for m in members}
+                for m in members:
+                    try:
+                        rels = json.loads(m["related_event"] or "[]")
+                    except Exception:
+                        rels = []
+                    for rel in rels:
+                        dst_id = rel.get("id")
+                        if dst_id in member_ids:
+                            sim = float(rel.get("similarity", 1.0))
+                            scores[m["id"]] += sim
+                            scores[dst_id] += sim
+                ranked = sorted(
+                    members,
+                    key=lambda m: (scores.get(m["id"], 0.0), m["id"]),
+                    reverse=True,
+                )
+                members = ranked[:max_cluster_size]
+
             events = "\n".join(f"- {m['title']}" for m in members)
             prompt = _TREND_PROMPT.format(industry=self.industry, events=events)
             if dry_run:
@@ -178,13 +231,17 @@ class RAG:
                 # 无对话 key 时降级：直接拼接事件标题作为趋势描述
                 content = "；".join(m["title"] for m in members)
             else:
-                resp = self.chat_client.chat.completions.create(
-                    model=self.llm_cfg.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.3,
-                    timeout=60,
-                )
-                content = resp.choices[0].message.content.strip()
+                try:
+                    resp = self.chat_client.chat.completions.create(
+                        model=self.llm_cfg.model,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.3,
+                        timeout=60,
+                    )
+                    content = resp.choices[0].message.content.strip()
+                except Exception as e:
+                    logger.warning(f"提炼趋势大模型调用失败（{type(e).__name__}：{e}），降级为拼接事件标题")
+                    content = "；".join(m["title"] for m in members)
             cluster_info = [{"id": m["id"], "title": m["title"]} for m in members]
             storage.save_trend(week_start, cluster_info, content)
             results.append({"cluster": cluster_info, "content": content})

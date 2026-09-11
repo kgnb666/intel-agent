@@ -1,0 +1,39 @@
+services:
+  intel-dashboard:
+    build: .
+    container_name: intel-dashboard
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    environment:
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
+      - ALERT_WEBHOOK=${ALERT_WEBHOOK:-}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+      - SMTP_TO=${SMTP_TO:-}
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+
+  intel-cron:
+    build: .
+    container_name: intel-cron
+    restart: unless-stopped
+    command: ["sh", "-c", "while true; do python run_daily.py; sleep 86400; done"]
+    environment:
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
+      - ALERT_WEBHOOK=${ALERT_WEBHOOK:-}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+      - SMTP_TO=${SMTP_TO:-}
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output

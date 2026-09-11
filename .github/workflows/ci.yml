@@ -1,0 +1,53 @@
+# CI：每次 push / PR 自动验证「依赖可装、语法正确、测试全绿、入口可跑」
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install ruff
+
+      - name: Lint check (ruff)
+        run: ruff check src tests *.py --select=E,F,W --ignore=E501
+
+      - name: Syntax check (compileall)
+        run: python -m compileall -q src tests run_crawl.py run_analyze.py run_rag.py run_daily.py dashboard.py make_demo_snapshot.py
+
+      - name: Unit tests
+        run: python -m pytest -q
+
+      # 冒烟：无任何 API key 的环境下，run_daily --no-send 必须跑通并产出 HTML。
+      # data/intel.db 被 gitignore，Storage 首次运行会自动建库建表，无需预置数据；
+      # 无 key 时分析 / RAG / 邮件环节自动跳过或降级，采集失败也只写降级说明、不中断流程。
+      - name: Smoke test (run_daily --no-send)
+        env:
+          LLM_API_KEY: ""
+          EMBEDDING_API_KEY: ""
+        run: |
+          python run_daily.py --no-send
+          ls -la output/
+          test "$(ls output/daily_*.html 2>/dev/null | wc -l)" -ge 1
+          test -s "$(ls -t output/daily_*.html | head -1)"
