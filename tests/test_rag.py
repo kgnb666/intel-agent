@@ -60,6 +60,30 @@ class TestBlob:
         assert out.dtype == np.float32
 
 
+class TestEmbeddingKeyResolution:
+    """embedding key 解析规则：未设置 → 回退 LLM_API_KEY；显式置空 → 关闭向量检索。"""
+
+    def test_missing_key_falls_back_to_llm_key(self, monkeypatch):
+        monkeypatch.delenv("TEST_EMB_KEY", raising=False)
+        monkeypatch.setenv("LLM_API_KEY", "sk-llm")
+        cfg = EmbeddingConfig({"embedding": {"api_key_env": "TEST_EMB_KEY"}})
+        assert cfg.api_key == "sk-llm"
+        assert cfg.available is True
+
+    def test_explicit_empty_key_disables_fallback(self, monkeypatch):
+        # 只有对话 key 的环境里，显式置空后不该把它发去硅基流动（否则每次提问先吃 401）
+        monkeypatch.setenv("TEST_EMB_KEY", "")
+        monkeypatch.setenv("LLM_API_KEY", "sk-llm")
+        cfg = EmbeddingConfig({"embedding": {"api_key_env": "TEST_EMB_KEY"}})
+        assert cfg.api_key == ""
+        assert cfg.available is False
+
+    def test_whitespace_only_key_counts_as_disabled(self, monkeypatch):
+        monkeypatch.setenv("TEST_EMB_KEY", "   ")
+        monkeypatch.setenv("LLM_API_KEY", "sk-llm")
+        assert EmbeddingConfig({"embedding": {"api_key_env": "TEST_EMB_KEY"}}).available is False
+
+
 class TestCosine:
     def test_identical_vectors_similarity_one(self):
         v = _vec(1, 2, 3)

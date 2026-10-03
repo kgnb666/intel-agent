@@ -4,7 +4,7 @@
 
 ## ✅ 代码与质量（已完成，可复跑验证）
 
-- [x] 单元测试全绿：`cd intel-agent && pytest -q`（197 个，覆盖十大模块）
+- [x] 单元测试全绿：`cd intel-agent && pytest -q`（248 个，覆盖十一大模块）
 - [x] 静态代码检查：`ruff check src tests *.py` 0 警告 0 错误通过 CI 门禁
 - [x] 容器化交付物：`Dockerfile`、`.dockerignore` 与 `docker-compose.yml` 齐备
 - [x] 采集实测：3 源单轮约 60 条、命中约 12 条、重复入库 0%

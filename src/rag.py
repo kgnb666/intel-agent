@@ -33,9 +33,14 @@ class EmbeddingConfig:
             "base_url", "https://api.siliconflow.cn/v1"
         )
         self.model = os.environ.get("EMBEDDING_MODEL") or emb.get("model", "BAAI/bge-small-zh-v1.5")
-        # 多数平台 embedding 与对话共用 key，缺省时回退读 LLM_API_KEY
+        # 多数平台 embedding 与对话共用 key，因此"完全没设置"时回退读 LLM_API_KEY。
+        # 但显式设成空字符串必须表示"关闭向量检索"：否则在只有 DeepSeek key 的环境里，
+        # 会把对话 key 发去硅基流动，每次提问先吃一个 401、再降级关键词，白等一轮外网。
         key_env = emb.get("api_key_env", "EMBEDDING_API_KEY")
-        self.api_key = os.environ.get(key_env) or os.environ.get("LLM_API_KEY", "")
+        raw_key = os.environ.get(key_env)
+        if raw_key is None:
+            raw_key = os.environ.get("LLM_API_KEY", "")
+        self.api_key = (raw_key or "").strip()
         self.threshold = float(emb.get("similarity_threshold", 0.75))
         self.top_k = int(emb.get("top_k", 3))
         self.batch_size = int(emb.get("batch_size", 16))

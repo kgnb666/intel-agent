@@ -22,14 +22,14 @@ from src.config import ConfigError, load_config_or_exit, save_keywords  # noqa: 
 
 cfg = load_config_or_exit()
 
-import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import plotly.graph_objects as go  # noqa: E402
 import streamlit as st  # noqa: E402
 
 from src.analyzer import LLMConfig  # noqa: E402
 from src.events import aggregate_events  # noqa: E402
-from src.rag import RAG, EmbeddingConfig, _from_blob, cosine  # noqa: E402
+from src.qa import CallBudget, answer_question, snippet  # noqa: E402
+from src.rag import EmbeddingConfig  # noqa: E402
 from src.storage import Storage  # noqa: E402
 
 st.set_page_config(page_title="行业情报看板", page_icon="📊", layout="wide")
@@ -92,7 +92,9 @@ st.sidebar.caption(f"行业主题：{cfg['industry']['name']}")
 if USING_DEMO:
     st.sidebar.caption("⚠️ 当前展示演示快照数据（data/intel.demo.db）")
 
-days = st.sidebar.slider("数据时间范围（天）", 1, 30, 7)
+# 上限 90 天：演示快照的历史分析数据（8 月）也在这个窗口内，否则「事件时间线」
+# 与情感趋势会因为窗口太窄而看起来是空的
+days = st.sidebar.slider("数据时间范围（天）", 1, 90, 7)
 since = (date.today() - timedelta(days=days - 1)).isoformat()
 
 st.sidebar.subheader("关注关键词")
@@ -194,6 +196,10 @@ with tab_board:
             plot_bgcolor="white", paper_bgcolor="white",
             legend=dict(orientation="h", y=1.15),
         )
+        # 全部数据落在同一天时（刚采集完、还没跨天），时间轴会退化成
+        # "23:59:59.9995 / 00:00:00 / 00:00:00.0005" 这种刻度，改用类目轴。
+        if trend["day"].nunique() <= 1:
+            fig.update_xaxes(type="category")
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("该时间范围内暂无已分析数据，先运行 run_analyze.py 生成分析结果。")
@@ -257,64 +263,71 @@ with tab_board:
 
 with tab_chat:
     st.title("💬 情报问答")
-    st.caption("基于库内情报的检索增强问答（RAG），回答附引用来源。")
+    st.caption("基于库内情报的检索增强问答（RAG）：先检索、再回答，答案附引用来源。")
 
     emb_cfg = EmbeddingConfig(cfg)
     llm_cfg = LLMConfig(cfg)
     llm_ready = llm_cfg.available
+
+    llm_client = None
+    if llm_ready:
+        from openai import OpenAI
+
+        llm_client = OpenAI(api_key=llm_cfg.api_key, base_url=llm_cfg.base_url)
+
+    # 公网无鉴权页面：给"生成式回答"加两层闸门（全站每小时的滑动窗口 + 单会话上限），
+    # 超限只退回抽取式回答，不报错、也不让额度被刷穿。
+    @st.cache_resource
+    def llm_budget() -> CallBudget:
+        return CallBudget(
+            max_per_window=int(os.environ.get("QA_LLM_MAX_PER_HOUR", "60")),
+            window_seconds=3600.0,
+        )
+
+    max_llm_per_session = int(os.environ.get("QA_LLM_MAX_PER_SESSION", "10"))
+    session_llm_used = int(st.session_state.get("qa_llm_used", 0))
+
+    retrieval_desc = (
+        "向量语义 + 关键词混合检索" if emb_cfg.available else "关键词加权检索（标题/标签/实体/摘要）"
+    )
+    st.caption(
+        f"检索方式：{retrieval_desc} · 生成方式："
+        + (
+            f"LLM 引用式回答（{llm_cfg.model}，本会话剩余 {max(0, max_llm_per_session - session_llm_used)} 次）"
+            if llm_ready
+            else "抽取式要点（本地，不调外部模型）"
+        )
+    )
     if not llm_ready:
-        st.warning("未配置 LLM，当前为纯检索模式：返回相关情报列表，不生成自然语言回答。")
+        st.info(
+            "当前用**抽取式回答**：直接给出命中情报的要点、匹配词与原文链接，全部内容来自库内原文。"
+            " 部署时设置环境变量 `LLM_API_KEY` 即自动升级为带引用编号的自然语言综述。"
+        )
+
+    with st.expander("⚙️ 检索设置"):
+        top_k = st.slider("引用条数", min_value=3, max_value=10, value=6)
+        qa_days = st.selectbox(
+            "检索时间范围", ["全库（不限时间）", "最近 30 天", "最近 90 天"], index=0
+        )
+    qa_days = {"全库（不限时间）": None, "最近 30 天": 30, "最近 90 天": 90}[qa_days]
 
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
+
+    if st.session_state.chat_history and st.button("🗑 清空对话"):
+        st.session_state.chat_history = []
+        st.rerun()
 
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    def retrieve(question: str, top_k: int = 5) -> pd.DataFrame:
-        """优先向量检索；embedding 接口不可用时自动降级为关键词匹配。"""
-        if emb_cfg.available:
-            try:
-                rag = RAG(emb_cfg, cfg["industry"]["name"])
-                qvec = rag.embed_texts([question])[0]
-                rows = query(
-                    "SELECT a.id, a.title, a.url, COALESCE(an.summary_ai, a.summary) as summary, a.embedding "
-                    "FROM articles a LEFT JOIN analysis an ON an.article_id = a.id "
-                    "WHERE a.embedding IS NOT NULL AND date(a.fetched_at) >= date('now', '-90 days') "
-                    "ORDER BY a.id DESC LIMIT 3000"
-                )
-                if len(rows):
-                    matrix = np.stack([_from_blob(b) for b in rows["embedding"]])
-                    sims = cosine(qvec, matrix)
-                    rows = rows.assign(sim=sims).sort_values("sim", ascending=False)
-                    return rows.head(top_k)
-                return rows
-            except Exception as e:
-                # 典型情况：LLM_API_KEY 被误当作 embedding key，硅基流动接口 401
-                st.warning(f"向量检索不可用（{type(e).__name__}），已降级为关键词匹配。")
-
-        # 关键词兜底：向 SQLite 发起独立的轻量全库检索 SQL，突破滑块天数限制且全库匹配标题与摘要
-        words = [w.strip() for w in question.split() if w.strip()]
-        if not words:
-            return pd.DataFrame()
-
-        clauses = []
-        params = []
-        for w in words:
-            pattern = f"%{w}%"
-            clauses.append("(a.title LIKE ? OR a.summary LIKE ? OR an.summary_ai LIKE ?)")
-            params.extend([pattern, pattern, pattern])
-
-        where_sql = " OR ".join(clauses)
-        params.append(top_k)
-        sql = f"""
-            SELECT a.id, a.title, a.url, COALESCE(an.summary_ai, a.summary) as summary
-            FROM articles a LEFT JOIN analysis an ON an.article_id = a.id
-            WHERE {where_sql}
-            ORDER BY a.id DESC LIMIT ?
-        """
-        return query(sql, tuple(params))
+    def open_qa_conn():
+        """问答走独立只读连接：不经过 st.cache_data，避免提问时读到过期缓存。"""
+        conn = sqlite3.connect(DB_PATH, timeout=10.0)
+        conn.execute("PRAGMA busy_timeout=5000;")
+        conn.row_factory = sqlite3.Row
+        return conn
 
     if question := st.chat_input("提问，例如：这周拼多多有什么动态？"):
         now = time.time()
@@ -323,52 +336,59 @@ with tab_chat:
             st.warning("⚠️ 提问过于频繁，请稍候再试（冷却时间 3 秒）。")
         else:
             st.session_state["last_chat_time"] = now
+            history = list(st.session_state.chat_history)
             st.session_state.chat_history.append({"role": "user", "content": question})
             with st.chat_message("user"):
                 st.markdown(question)
 
-            hits = retrieve(question)
-            refs = "\n".join(
-                f"- [{str(r['title']).replace('[', '【').replace(']', '】')}]({r['url']})"
-                for _, r in hits.iterrows()
-                if pd.notna(r.get("url"))
-            )
-
-            if llm_ready and len(hits):
-                context = "\n".join(
-                    f"《{r['title']}》：{(r.get('summary') or '')[:200]}" for _, r in hits.iterrows()
-                )
-                history_text = "\n".join(
-                    f"{m['role']}: {m['content']}" for m in st.session_state.chat_history[-6:-1]
-                )
-                prompt = (
-                    f"你是行业情报助手。基于以下检索到的情报回答用户问题，"
-                    f"回答结尾不要自行编造来源。\n\n相关情报：\n{context}\n\n"
-                    f"对话历史：\n{history_text}\n\n用户问题：{question}"
-                )
-                from openai import OpenAI
-
+            with st.spinner("正在检索库内情报…"):
+                session_exhausted = llm_ready and session_llm_used >= max_llm_per_session
+                conn = open_qa_conn()
                 try:
-                    client = OpenAI(api_key=llm_cfg.api_key, base_url=llm_cfg.base_url)
-                    answer = client.chat.completions.create(
-                        model=llm_cfg.model,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=0.3,
-                        timeout=60,
-                    ).choices[0].message.content
-                    reply = answer + ("\n\n**引用来源：**\n" + refs if refs else "")
-                except Exception as e:
-                    reply = (
-                        f"⚠️ 大模型回答生成失败（{type(e).__name__}：{e}），已为您直接展示检索到的相关情报：\n\n"
-                        + (refs or "（无可用链接）")
+                    result = answer_question(
+                        conn,
+                        question,
+                        emb_cfg=emb_cfg,
+                        # 单会话超限后不再把 llm_cfg 传进去，直接走抽取式回答
+                        llm_cfg=None if session_exhausted else llm_cfg,
+                        llm_client=None if session_exhausted else llm_client,
+                        budget=llm_budget(),
+                        top_k=top_k,
+                        days=qa_days,
+                        history=history,
                     )
-            elif len(hits):
-                reply = "**检索到以下相关情报（未配置 LLM）：**\n" + (refs or "（无）")
-            else:
-                reply = "库内未检索到相关情报，可先点击侧边栏「立即采集」补充数据。"
+                finally:
+                    conn.close()
 
+            reply = result.answer
+            if result.llm_used:
+                st.session_state["qa_llm_used"] = session_llm_used + 1
+            if session_exhausted:
+                reply = f"> 本次会话的模型调用次数已用完（上限 {max_llm_per_session} 次），下面改用抽取式回答。\n\n{reply}"
             with st.chat_message("assistant"):
                 st.markdown(reply)
+                if result.warning:
+                    st.caption(f"⚠️ {result.warning}")
+                if result.hits:
+                    with st.expander(f"🔍 检索明细（命中 {result.hit_count} 条）"):
+                        st.caption(f"候选 {result.stats.get('scanned', 0)} 篇 · {result.mode_note}")
+                        for rank, hit in enumerate(result.hits, 1):
+                            meta = " · ".join(x for x in (hit.source, hit.date, hit.sentiment) if x)
+                            st.markdown(
+                                f"**{rank}. [{hit.title.replace('[', '【').replace(']', '】')}]({hit.url})**"
+                                if hit.url
+                                else f"**{rank}. {hit.title}**"
+                            )
+                            matched = "、".join(hit.matched[:8])
+                            st.caption(
+                                f"匹配度 {hit.score:.2f}"
+                                + (f" · 语义相似度 {hit.similarity:.2f}" if hit.similarity >= 0 else "")
+                                + (f" · 命中词 {matched}" if matched else "")
+                                + (f" · {meta}" if meta else "")
+                            )
+                            text = snippet(hit.summary, hit.matched, width=140)
+                            if text:
+                                st.write(text)
             st.session_state.chat_history.append({"role": "assistant", "content": reply})
 
 # ---------------- 事件时间线 ----------------

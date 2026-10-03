@@ -53,7 +53,7 @@
 - [x] `make_demo_snapshot.py` 生成演示快照（24 篇全分析 / 3 条趋势）
 - [x] 看板云端自动回退演示库（`no such table` 崩溃修复）
 - [x] requirements 补显式 pandas；真实 bge-m3 embedding 支持
-- [x] 197 个单元测试全绿；README / PROMPTS / 面试问答预案齐备
+- [x] 248 个单元测试全绿；README / PROMPTS / 面试问答预案齐备
 - [x] 部署实例：https://intel-agent.streamlit.app
 
 **里程碑**：项目可交付、可演示、可讲。
@@ -86,7 +86,7 @@
 - [x] 趋势提炼 Prompt 瘦身：`weekly_trends` 限制单趋势簇代表性文章上限 10 篇，节约 Token 并保持核心聚焦
 - [x] 生产 Docker 容器化交付物：轻量化 `Dockerfile`、`.dockerignore` 与双服务编排 `docker-compose.yml`
 - [x] CI 静态代码质量门禁：集成 `ruff` 扫描（`--select=E,F,W --ignore=E501`），代码库保持 0 规范告警
-- [x] 197 个单元测试全绿（覆盖告警/分析/配置/采集/事件/日志/邮件/RAG/日报/存储十大模块）
+- [x] 248 个单元测试全绿（覆盖告警/分析/配置/采集/事件/日志/邮件/问答/RAG/日报/存储十一大模块）
 
 **里程碑**：内存规模受控、图计算秒级缓存响应、交付容器化、CI 规范门禁全绿。
 

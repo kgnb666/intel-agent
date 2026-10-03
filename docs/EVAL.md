@@ -9,13 +9,15 @@ cd intel-agent
 pytest -q
 ```
 
-**197 个用例全绿**（告警 25 / 分析 20 / 配置 30 / 采集 20 / 事件 13 / 日志 4 / 邮件 17 / RAG 23 / 日报 15 / 存储 30），覆盖十大模块：
+**248 个用例全绿**（告警 25 / 分析 20 / 配置 30 / 采集 20 / 事件 13 / 日志 4 / 邮件 17 / 问答 48 / RAG 26 / 日报 15 / 存储 30），覆盖十一大模块：
 
 - 配置：六段字段级校验（keywords / sources / max_items_per_source / similarity_threshold / api_key_env 等），错误消息带字段名与段名，入口 1 秒内报错
 - 采集：关键词命中过滤（含大小写不敏感匹配、空关键词边界）、标题相似度去重（长度剪枝 + 字符集初筛 + SequenceMatcher 阈值判定）、HTML 清洗（含实体反转义）、HTTP 请求重试、信源健康探测与连续故障熔断跳过机制
 - 存储：建表、WAL 模式与防锁库设置、URL 去重、待分析筛选、`save_analysis` 事务回滚、`insert_articles` 批量事务写入、`prune_history` TTL 级联修剪与 WAL Checkpoint、`feed_health` 失败追踪与熔断判定、embedding 存取、related_event / trends 读写、sent_reports 发送记录、sent_alerts 告警记录
 - 分析：prompt 构造、JSON 宽容解析（坏 JSON / 缺字段 / 非法枚举 / 置信度钳制）、解析失败重试、指数退避、dry-run 不调 API
 - RAG：BLOB 往返、余弦相似度（含零向量防除零）、阈值过滤、Top-K、批量切片向量化与单批重试、幂等关联、周度趋势代表性成员上限（10 篇）防 Token 膨胀、周度趋势无 Key / 异常降级（孤立单篇跳过）、dry-run
+- 问答：中文 n-gram 分词与停用词过滤、英文词小写归一、字段加权排序（标题 ×3 / 标签·实体 ×2 / 摘要 ×1.2 / 来源 ×0.6）、纯年份与单字碎片不构成命中、宽松兜底降权、向量维度不符自动跳过、向量 + 关键词混合融合与归一、命中概览统计（时间跨度 / 来源分布 / 情感分布 / 高频实体）、摘要片段定位、抽取式要点回答、零命中改写引导、LLM 引用编号消息组装与调用失败降级、LLM 调用额度滑动窗口限流（默认 60 次/小时）与超限自动降级、时间范围过滤
+- 检索凭据解析：embedding key 未设置时回退读取对话 key（兼容共用 key 的平台），显式置空则关闭向量检索——避免只有对话 key 的环境把 key 发去 embedding 供应商、每次提问先吃一个 401
 - 事件：related_event 链合并（链 / 环 / 去重 / 链尾文章纳入）、长链传递性防漂移与 `max_size=15` 拓扑关联密度截断、按规模排序、时间线排序、窗口过滤、裸 sqlite 连接兼容
 - 日志：统一标准 logging 体系、控制台输出与 5MB 文件自动轮转落盘至 `output/agent.log`
 - 告警：负面 + 置信度阈值筛选、近 2 天时间窗口限制、sent_alerts 持久化去重防风暴（--force-alert 强制重发）、钉钉 / 企业微信 payload 构造、HTTP/errcode 状态码排障日志留痕、推送成功 / 失败降级、`--webhook-dry-run`

@@ -33,6 +33,24 @@ streamlit run dashboard.py
 
 看板无 Key 也能展示：未配置 embedding key 时问答自动降级为关键词检索；数据文件缺失时自动回退演示库 `data/intel.demo.db`。
 
+### 问答页的密钥与额度控制（自托管部署）
+
+```bash
+# 生成式回答（自然语言综述 + [1][2] 引用编号）
+LLM_API_KEY=sk-xxx            python -m streamlit run dashboard.py
+# 语义检索（bge-m3 等 embedding）；不配置时走关键词加权检索
+EMBEDDING_API_KEY=sk-yyy      python -m streamlit run dashboard.py
+# 显式置空 = 关闭向量检索，不会把对话 key 误发到 embedding 供应商
+# EMBEDDING_API_KEY=
+```
+
+看板一旦暴露在公网且没有登录，任何访客提问都会消耗账号额度，因此生成式回答默认有两层闸门：
+
+| 环境变量 | 默认 | 作用 |
+|---|---|---|
+| `QA_LLM_MAX_PER_HOUR` | `60` | 全站滑动窗口内允许的模型调用次数，超出后退回抽取式回答 |
+| `QA_LLM_MAX_PER_SESSION` | `10` | 单个浏览器会话的模型调用上限 |
+
 ## 3. 每日定时推送（Windows 任务计划程序）
 
 ```bat

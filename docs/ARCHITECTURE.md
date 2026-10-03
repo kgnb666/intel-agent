@@ -28,9 +28,10 @@ flowchart LR
 | `src/crawler.py` | RSS 采集 | 关键词命中过滤 + 标题 `SequenceMatcher` 相似度 ≥0.85 模糊去重；超时重试 2 次 |
 | `src/analyzer.py` | LLM 结构化分析 | JSON 字段契约 + `response_format=json_object` + 宽容提取/严格校验 + 失败重试 2 次 |
 | `src/rag.py` | RAG 历史关联 | embedding 以 float32 BLOB 存 SQLite；numpy 全量余弦；阈值 0.6；Top-3 相似事件 |
+| `src/qa.py` | 情报问答（检索 + 回答） | 中文 n-gram 分词（不依赖 jieba）；字段加权打分（标题 ×3 / 标签·实体 ×2 / 摘要 ×1.2）；向量 + 关键词混合排序；未配 LLM 时输出抽取式要点回答，零命中给改写引导 |
 | `src/report.py` | HTML 日报生成 | table 布局兼容邮件客户端；每步独立容错，失败降级写入说明 |
 | `src/mailer.py` | SMTP 推送 | 未配置 SMTP 时 `--no-send` 只落盘 HTML |
-| `dashboard.py` | Streamlit 看板 | 指标卡 / 情感趋势 / 情报列表 / 对话式问答 / 一键采集 / 关键词在线配置 |
+| `dashboard.py` | Streamlit 看板 | 指标卡 / 情感趋势 / 情报列表 / 对话式问答（引用式或抽取式）/ 事件时间线 / 一键采集 / 关键词在线配置 |
 | `make_demo_snapshot.py` | 演示快照 | 从 `intel.db` 生成确定性规则数据，供无 Key 部署演示 |
 | `run_crawl.py` / `run_analyze.py` / `run_rag.py` / `run_daily.py` | 各阶段入口 | 均支持 `--dry-run`，无 API Key 也能验证流程 |
 
