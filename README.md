@@ -118,7 +118,7 @@ schtasks /create /tn "IntelAgentDaily" /tr "\"C:\path\to\venv\Scripts\python.exe
    LLM_API_KEY = "sk-xxx"                 # 可选，不配则问答降级为抽取式要点回答（本地，不调外部模型）
    EMBEDDING_API_KEY = "sk-yyy"           # 可选，不配时向量检索自动降级关键词匹配
    ```
-5. 当前部署实例：https://intel-agent.streamlit.app
+5. 当前部署实例：**https://intel.myiskg.com/** —— 由 `dashboard.py` 直接托管在自建服务器（systemd + Nginx），三个视图（情报看板 / 情报问答 / 事件时间线）均可访问；Streamlit Community Cloud 仍可作为备选形态。
 
 ## 配套文档
 

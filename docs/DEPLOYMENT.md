@@ -82,10 +82,10 @@ set SMTP_TO=receiver@example.com
 4. 在 Settings → Secrets 中配置：
    ```toml
    INTEL_DB_PATH = "data/intel.demo.db"   # 指向演示快照，只读展示
-   LLM_API_KEY = "sk-xxx"                 # 可选，不配则问答降级为纯检索
+   LLM_API_KEY = "sk-xxx"                 # 可选，不配则问答降级为抽取式要点回答
    EMBEDDING_API_KEY = "sk-yyy"           # 可选，不配时向量检索降级关键词匹配
    ```
-5. 当前部署实例：https://intel-agent.streamlit.app
+5. 当前部署实例：**https://intel.myiskg.com/** —— 由 `dashboard.py` 直接托管在自建服务器（systemd + Nginx，密钥走 `EnvironmentFile` 注入），三个视图（情报看板 / 情报问答 / 事件时间线）均可访问；Streamlit Community Cloud 仍可作为备选形态。
 
 ## 5. Docker 容器化部署（生产交付）
 
